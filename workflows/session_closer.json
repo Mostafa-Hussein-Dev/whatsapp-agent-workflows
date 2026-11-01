@@ -1,0 +1,257 @@
+{
+  "id": "waSessionCloser01",
+  "name": "WhatsApp AI Agent - Session Closer",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "c0000000-0000-4000-8000-000000000001",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/session/close-idle",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Secret",
+              "value": "change_me_internal_secret"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c0000000-0000-4000-8000-000000000002",
+      "name": "Close Idle Sessions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/session/{{ $json.id }}/transcript",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Secret",
+              "value": "change_me_internal_secret"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c0000000-0000-4000-8000-000000000003",
+      "name": "Get Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per session: turn the transcript into a summarization prompt\nreturn $input.all().map(i => {\n  const t = i.json;\n  const tz = t.business_timezone || 'Asia/Beirut';\n  const started = new Date(t.session.started_at);\n  const day = started.toLocaleDateString('en-CA', { timeZone: tz });\n  const weekday = started.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long' });\n  const lines = (t.messages || []).map(m => `${m.role === 'user' ? 'Customer' : 'Assistant'}: ${m.message}`).join('\\n');\n  const prompt = `You write short memory notes for a business's WhatsApp assistant.\nBusiness: ${t.business_name}\nThis conversation took place on ${weekday} ${day} (business local time).\n\nReturn ONLY a JSON object, no markdown, with these keys:\n\"summary\": 3 to 6 short lines, written in the language the customer used. Include what the customer wanted; what was decided, booked or ordered (with any IDs, times); anything still unresolved. Convert EVERY relative date or time (\"today\", \"tomorrow\", \"Saturday\", \"next week\", \"in two days\") into an absolute date such as \"Saturday 2025-03-15\", computed from the conversation date above. Facts only, no greetings, never invent details. Write the summary as one string, not a list.\n\"name\": the customer's name if stated, else null.\n\"language\": the customer's main language as a short code (ar, fr, en, ...), else null.\n\"preferences\": clear stated preferences or needs worth remembering (allergies, preferred times, favourite items), else null.\n\nCONVERSATION:\n${lines}`;\n  return { json: { session_id: t.session.id, prompt } };\n});"
+      },
+      "id": "c0000000-0000-4000-8000-000000000004",
+      "name": "Build Summary Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "messages": {
+          "messageValues": []
+        }
+      },
+      "id": "c0000000-0000-4000-8000-000000000005",
+      "name": "Summarize",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        1160,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gpt-5-nano"
+        },
+        "options": {
+          "maxTokens": 1200,
+          "maxRetries": 4
+        }
+      },
+      "id": "c0000000-0000-4000-8000-000000000006",
+      "name": "OpenAI Summary Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1160,
+        520
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openAiCred01",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turn the model output into the /session/{id}/summary body (falls back to the raw text as the summary)\nreturn $input.all().map(i => {\n  const raw = String(i.json.text || '').replace(/<think>[\\s\\S]*?<\\/think>/g, '').trim();\n  let out = null;\n  const m = raw.match(/\\{[\\s\\S]*\\}/);\n  if (m) { try { out = JSON.parse(m[0]); } catch (e) { out = null; } }\n  const str = v => { if (Array.isArray(v)) v = v.filter(x => typeof x === 'string').join(String.fromCharCode(10)); return (typeof v === 'string' && v.trim() ? v.trim() : null); };\n  const summary = out ? str(out.summary) : (raw || null);\n  return { json: {\n    session_id: $('Build Summary Prompt').item.json.session_id,\n    body: { summary, failed: !summary, name: out ? str(out.name) : null, language: out ? str(out.language) : null, preferences: out ? str(out.preferences) : null },\n  } };\n});"
+      },
+      "id": "c0000000-0000-4000-8000-000000000008",
+      "name": "Parse Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:8000/session/{{ $json.session_id }}/summary",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.body) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Secret",
+              "value": "change_me_internal_secret"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c0000000-0000-4000-8000-000000000007",
+      "name": "Save Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1720,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 10 minutes": {
+      "main": [
+        [
+          {
+            "node": "Close Idle Sessions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Close Idle Sessions": {
+      "main": [
+        [
+          {
+            "node": "Get Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Transcript": {
+      "main": [
+        [
+          {
+            "node": "Build Summary Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary Prompt": {
+      "main": [
+        [
+          {
+            "node": "Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize": {
+      "main": [
+        [
+          {
+            "node": "Parse Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Summary": {
+      "main": [
+        [
+          {
+            "node": "Save Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Summary Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarize",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

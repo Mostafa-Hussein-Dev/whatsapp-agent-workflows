@@ -1,0 +1,45 @@
+{
+  "name": "WhatsApp AI Agent - Proactive Dispatcher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "minutes", "minutesInterval": 5 }
+          ]
+        }
+      },
+      "id": "f0000000-0000-4000-8000-000000000010",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [400, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/internal/dispatch",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Internal-Secret", "value": "change_me_internal_secret" }
+          ]
+        },
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "id": "f0000000-0000-4000-8000-000000000011",
+      "name": "Run Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 320]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 5 minutes": { "main": [[{ "node": "Run Dispatch", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "meta": { "instanceId": "7b5988f5b64575b1b5db68c68e307c65d91124d0fc30c4e653058bc90fddda77" },
+  "tags": []
+}
